@@ -25,7 +25,7 @@ No install needed. Open the built file in a browser:
 
 ```bash
 python3 build.py
-open dist/Intercompany_Detective.html   # or double-click it
+# then open dist/Intercompany_Detective.html (double-click it)
 ```
 
 This builds one self-contained HTML file with the synthetic sample data from `data/sample.json`.
@@ -39,13 +39,19 @@ You can also open any build and click **Load data** to try a `data.json` for the
 ## Project layout
 
 ```
-src/index.html        the app (HTML, CSS and JS in one file)
+src/index.html        page markup (the tabs and layout)
+src/styles.css        design system and all styling
+src/app.js            all app logic, charts and PDF report
 vendor/               jsPDF, used for the PDF report
 data/sample.json      synthetic sample data
 data/README.md        data format
 build.py              builds dist/Intercompany_Detective.html
 docs/                 screenshots
 ```
+
+## Editing
+
+Change `src/index.html`, `src/styles.css` or `src/app.js`, run `python3 build.py`, and reload `dist/Intercompany_Detective.html`. The build inlines everything into one file you can share.
 
 ## Notes
 
