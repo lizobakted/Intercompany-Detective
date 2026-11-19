@@ -14,6 +14,10 @@ if not data.exists():
 
 html = (root / "src/index.html").read_text(encoding="utf-8")
 lib = (root / "vendor/jspdf.umd.min.js").read_text(encoding="utf-8").replace("</script", "<\\/script")
+css = (root / "src/styles.css").read_text(encoding="utf-8")
+js = (root / "src/app.js").read_text(encoding="utf-8").replace("</script", "<\\/script")
+html = html.replace("<!--STYLE-->", "<style>" + css + "</style>")
+html = html.replace("<!--SCRIPT-->", "<script>" + js + "</script>")
 html = html.replace("<!--VENDOR:jspdf-->", "<script>" + lib + "</script>")
 html = html.replace("<!--DATA-->", data.read_text(encoding="utf-8").strip().replace("</", "<\\/"))
 
