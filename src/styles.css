@@ -72,6 +72,8 @@ button:hover{background:var(--blue-soft)}
 button.primary{background:var(--blue);color:#fff}
 button.primary:hover{background:var(--blue-deep);border-color:var(--blue-deep)}
 :root[data-theme="dark"] button.primary,:root:not([data-theme="light"]) button.primary{color:#001135}
+#ownerForm button.primary{background:var(--surface);color:var(--blue)}
+#ownerForm button.primary:hover{background:var(--blue-soft);border-color:var(--blue)}
 button.ghost{border-color:transparent;background:transparent;color:var(--blue);padding:4px 6px}
 button.small{padding:3px 10px;font-size:12.5px}
 button:disabled{opacity:.5;cursor:default}
