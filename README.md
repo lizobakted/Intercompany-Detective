@@ -11,6 +11,7 @@ A single-page demo for the Nokia Finance Hackathon. It scans open intercompany l
 | Overview | KPI cards, lines by posting month, issues by group, issues by type, oldest overdue cases |
 | Errors | Five error groups, each line with a proposed fix you can approve or reject |
 | Overdue | Lines past due grouped into cases, with owner, status and note |
+| Owners | Manage the names available for overdue-case assignments |
 | Calendar | Due dates in red (overdue), amber (within 14 days) and green, plus a bell for alerts |
 | Analysis | Error shares, review progress, recommendations, CSV exports and a PDF report |
 | Currency | USD, EUR and HUF rates, add any other currency, open amounts by currency |
@@ -48,7 +49,7 @@ docs/                 screenshots
 
 ## Notes
 
-- Approve and reject decisions, owners, statuses and notes are stored in your browser only.
+- Approve and reject decisions, owner names, assignments, statuses and notes are stored in your browser only.
 - Currency rates are ECB euro reference rates from 12 Nov 2026.
 - The AI buttons and the ECB refresh only work when the page runs inside Claude as an artifact. In a plain browser they are hidden.
 - The design follows the public look of nokia.com (blue `#005AFF`, 4px base unit). It uses no Nokia logo or assets.
