@@ -1,0 +1,7 @@
+# Confidential hackathon data stays local
+data/*
+!data/sample.json
+*.xlsx
+dist/
+.DS_Store
+__pycache__/
