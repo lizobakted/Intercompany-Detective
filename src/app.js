@@ -207,12 +207,19 @@ function renderErrors(){
     const mine = r.codes.filter(c=>codes.includes(c)); const c0=mine[0]||r.codes[0]; const d=decisions[r.i];
     const dueP = r.due? `<span class="pill ${dueCls(r.due)}">${fmtDate(r.due)}</span>` : `<span class="note">–</span>`;
     const fx=fixFor(r,c0); const od=r.due&&r.due<REPORT;
-    return `<tr data-i="${r.i}" class="${d==="ok"?"is-ok":d==="no"?"is-no":""}"><td><b>${esc(r.co)} → ${esc(r.tp||"—")}</b><div class="note">${r.sheet} · ${esc(r.doc)} · ${fmtDate(r.pdate)}</div></td><td class="num"><b>${nf2.format(r.dc)}</b> ${esc(r.cur)}<div class="note">${r.age!=null?nf0.format(r.age)+" days open":""}${od?' · <span style="color:var(--red)">overdue</span>':""}</div></td><td class="wrap"><div>${r.codes.slice(0,2).map(c=>`<span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:c}</span>`).join(" ")}${r.codes.length>2?` <span class="note">+${r.codes.length-2}</span>`:""}</div><div class="fixtxt">${esc(fx)}</div><div class="inline-ai" hidden></div></td><td class="dec"><div class="decide"><button class="ic ok" aria-pressed="${d==="ok"}" title="Approve fix" aria-label="Approve fix">✓</button><button class="ic no" aria-pressed="${d==="no"}" title="Reject fix" aria-label="Reject fix">✕</button></div><button class="ghost small ai-only" data-ai>Explain</button></td></tr>`;
+    return `<tr data-i="${r.i}" class="${d==="ok"?"is-ok":d==="no"?"is-no":""}"><td><b>${esc(r.co)} → ${esc(r.tp||"—")}</b><div class="note">${r.sheet} · ${esc(r.doc)} · ${fmtDate(r.pdate)}</div></td><td class="num"><b>${nf2.format(r.dc)}</b> ${esc(r.cur)}<div class="note">${r.age!=null?nf0.format(r.age)+" days open":""}${od?' · <span style="color:var(--red)">overdue</span>':""}</div></td><td class="wrap"><div>${r.codes.slice(0,2).map(c=>`<span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:c}</span>`).join(" ")}${r.codes.length>2?` <button type="button" class="ghost small more-issues" aria-expanded="false">+${r.codes.length-2}</button>`:""}</div><div class="fixtxt">${esc(fx)}</div><div class="extra-issues" hidden>${r.codes.slice(2).map(c=>`<div class="extra-issue"><span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:esc(c)}</span><div class="fixtxt">${esc(fixFor(r,c))}</div></div>`).join("")}</div><div class="inline-ai" hidden></div></td><td class="dec"><div class="decide"><button class="ic ok" aria-pressed="${d==="ok"}" title="Approve fix" aria-label="Approve fix">✓</button><button class="ic no" aria-pressed="${d==="no"}" title="Reject fix" aria-label="Reject fix">✕</button></div><button class="ghost small ai-only" data-ai>Explain</button></td></tr>`;
   }).join("") : `<tr><td colspan="4" class="empty">No lines match.</td></tr>`;
   $("#errBody").querySelectorAll("tr[data-i]").forEach(tr=>{
     const r=ROWS[+tr.dataset.i];
     tr.querySelector(".ok").onclick=()=>{ setDecision(r.i,"ok"); renderErrors(); };
     tr.querySelector(".no").onclick=()=>{ setDecision(r.i,"no"); renderErrors(); };
+    const more=tr.querySelector(".more-issues");
+    if(more) more.onclick=()=>{
+      const expanded=more.getAttribute("aria-expanded")!=="true";
+      more.setAttribute("aria-expanded",String(expanded));
+      more.textContent=expanded?"Show less":`+${r.codes.length-2}`;
+      tr.querySelector(".extra-issues").hidden=!expanded;
+    };
     const ab=tr.querySelector("[data-ai]"); ab.onclick=()=>{ const out=tr.querySelector(".inline-ai");
       ask(`You are an intercompany reconciliation analyst at a telecom group. In at most 3 short sentences, explain why this open SAP line was flagged and what the accountant should do, in plain English. No preamble.\nLine: ERP ${r.sheet}, company ${r.co}, trading partner ${r.tp||"(none)"}, account ${r.acct} ${r.desc}, doc ${r.doc} type ${r.type}, posted ${r.pdate}, due ${r.due||"n/a"}, amount ${r.dc} ${r.cur} (local ${r.lc} ${r.lcur}), age ${r.age} days, text "${r.text}", reference "${r.ref}".\nFlags: ${r.codes.map(c=>CODES[c]?CODES[c].name:c).join(", ")}.\nProposed fix: ${fixFor(r,r.codes[0])}.`, out, ab); };
   });
