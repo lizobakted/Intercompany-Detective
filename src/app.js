@@ -170,15 +170,28 @@ function renderDonut(){
   $("#donut").querySelectorAll(".seg").forEach(el=>{ const go=()=>{ location.hash="#errors/"+el.dataset.g; }; el.onclick=go; el.onkeydown=e=>{ if(e.key==="Enter") go(); }; });
 }
 function renderLine(){
-  const m=new Map(); ROWS.forEach(r=>{ if(!r.pdate) return; const k=r.pdate.slice(0,7); let o=m.get(k); if(!o){ o={a:0,b:0}; m.set(k,o); } o.a++; if(r.codes.length) o.b++; });
-  const keys=[...m.keys()].sort().slice(-24); if(!keys.length) return;
+  const [reportYear,reportMonth]=REPORT.slice(0,7).split("-").map((v,i)=>i?v-1:+v);
+  const keys=[]; const m=new Map();
+  for(let i=23;i>=0;i--){
+    const d=new Date(Date.UTC(reportYear,reportMonth-i,1));
+    const k=d.toISOString().slice(0,7);
+    keys.push(k); m.set(k,{a:0,b:0});
+  }
+  ROWS.forEach(r=>{
+    if(!r.pdate) return;
+    const k=r.pdate.slice(0,7);
+    const o=m.get(k);
+    if(!o) return;
+    o.a++; if(r.codes.length) o.b++;
+  });
+  if(!keys.length) return;
   const W=720,H=260,L=44,Rr=12,T=14,B=28; const max=Math.max(...keys.map(k=>m.get(k).a)); const nice=Math.ceil(max/100)*100||100;
   const x=i=>L+(W-L-Rr)*i/Math.max(1,keys.length-1), y=v=>T+(H-T-B)*(1-v/nice);
   const path=f=>keys.map((k,i)=>(i?"L":"M")+x(i).toFixed(1)+" "+y(m.get(k)[f]).toFixed(1)).join(" ");
   const grid=[0,.25,.5,.75,1].map(t=>{ const v=nice*t; return `<line x1="${L}" x2="${W-Rr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${nf0.format(v)}</text>`; }).join("");
-  const yrs=[]; keys.forEach((k,i)=>{ if(k.endsWith("-01")) yrs.push(`<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="11" fill="var(--muted)">${k.slice(0,4)}</text>`); });
+  const months=[]; keys.forEach((k,i)=>{ if(i%3===0){ const anchor=i===0?"start":"middle"; months.push(`<text x="${x(i)}" y="${H-8}" text-anchor="${anchor}" font-size="11" fill="var(--muted)">${MON[+k.slice(5,7)-1]} '${k.slice(2,4)}</text>`); } });
   const area=`${path("a")} L${x(keys.length-1)} ${y(0)} L${x(0)} ${y(0)} Z`;
-  $("#lineChart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Open lines by posting month">${grid}${yrs.join("")}<path d="${area}" fill="var(--c1)" opacity=".08"/><path d="${path("a")}" fill="none" stroke="var(--c1)" stroke-width="2" stroke-linejoin="round"/><path d="${path("b")}" fill="none" stroke="var(--c2)" stroke-width="2" stroke-linejoin="round"/><g id="xh" hidden><line id="xl" y1="${T}" y2="${H-B}" stroke="var(--line-strong)"/><circle id="xa" r="4" fill="var(--c1)" stroke="var(--surface)" stroke-width="2"/><circle id="xb" r="4" fill="var(--c2)" stroke="var(--surface)" stroke-width="2"/></g><rect id="hit" x="${L}" y="${T}" width="${W-L-Rr}" height="${H-T-B}" fill="transparent"/></svg><div class="tip" id="tip" hidden></div>`;
+  $("#lineChart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Open lines by posting month over the last 24 calendar months">${grid}${months.join("")}<path d="${area}" fill="var(--c1)" opacity=".08"/><path d="${path("a")}" fill="none" stroke="var(--c1)" stroke-width="2" stroke-linejoin="round"/><path d="${path("b")}" fill="none" stroke="var(--c2)" stroke-width="2" stroke-linejoin="round"/><g id="xh" hidden><line id="xl" y1="${T}" y2="${H-B}" stroke="var(--line-strong)"/><circle id="xa" r="4" fill="var(--c1)" stroke="var(--surface)" stroke-width="2"/><circle id="xb" r="4" fill="var(--c2)" stroke="var(--surface)" stroke-width="2"/></g><rect id="hit" x="${L}" y="${T}" width="${W-L-Rr}" height="${H-T-B}" fill="transparent"/></svg><div class="tip" id="tip" hidden></div>`;
   const svg=$("#lineChart svg"), tip=$("#tip");
   const move=e=>{ const rc=svg.getBoundingClientRect(); const px=(e.clientX-rc.left)/rc.width*W; const i=Math.max(0,Math.min(keys.length-1,Math.round((px-L)/(W-L-Rr)*(keys.length-1)))); const k=keys[i], o=m.get(k);
     $("#xh").hidden=false; $("#xl").setAttribute("x1",x(i)); $("#xl").setAttribute("x2",x(i)); $("#xa").setAttribute("cx",x(i)); $("#xa").setAttribute("cy",y(o.a)); $("#xb").setAttribute("cx",x(i)); $("#xb").setAttribute("cy",y(o.b));
@@ -406,11 +419,22 @@ function txt(x,s,a,b,o={}){ x.font=(o.w||400)+" "+(o.s||22)+"px "+FONT; x.fillSt
 function wrap(x,s,a,b,maxW,lh,o={}){ x.font=(o.w||400)+" "+(o.s||22)+"px "+FONT; x.fillStyle=o.c||PAL.fg; x.textAlign="left"; const words=String(s).split(" "); let line=""; let y=b; words.forEach(w=>{ const t=line?line+" "+w:w; if(x.measureText(t).width>maxW&&line){ x.fillText(line,a,y); y+=lh; line=w; } else line=t; }); if(line){ x.fillText(line,a,y); y+=lh; } return y; }
 function cLine(w,h){
   const [c,x]=mkCanvas(w,h); x.fillStyle="#fff"; x.fillRect(0,0,w,h);
-  const m=new Map(); ROWS.forEach(r=>{ if(!r.pdate) return; const k=r.pdate.slice(0,7); let o=m.get(k); if(!o){ o={a:0,b:0}; m.set(k,o);} o.a++; if(r.codes.length) o.b++; });
-  const keys=[...m.keys()].sort().slice(-24); const L=70,T=20,B=44,Rr=14; const mx=Math.max(...keys.map(k=>m.get(k).a)); const nice=Math.ceil(mx/500)*500||500;
+  const [reportYear,reportMonth]=REPORT.slice(0,7).split("-").map((v,i)=>i?v-1:+v);
+  const m=new Map(); const keys=[];
+  for(let i=23;i>=0;i--){
+    const d=new Date(Date.UTC(reportYear,reportMonth-i,1));
+    const k=d.toISOString().slice(0,7); keys.push(k); m.set(k,{a:0,b:0});
+  }
+  ROWS.forEach(r=>{
+    if(!r.pdate) return;
+    const k=r.pdate.slice(0,7); const o=m.get(k);
+    if(!o) return;
+    o.a++; if(r.codes.length) o.b++;
+  });
+  const L=70,T=20,B=44,Rr=14; const mx=Math.max(...keys.map(k=>m.get(k).a)); const nice=Math.ceil(mx/500)*500||500;
   const X=i=>L+(w-L-Rr)*i/Math.max(1,keys.length-1), Y=v=>T+(h-T-B)*(1-v/nice);
   [0,.5,1].forEach(t=>{ x.strokeStyle=PAL.line; x.lineWidth=1; x.beginPath(); x.moveTo(L,Y(nice*t)); x.lineTo(w-Rr,Y(nice*t)); x.stroke(); txt(x,nf0.format(nice*t),L-10,Y(nice*t)+5,{s:18,c:PAL.muted,al:"right"}); });
-  keys.forEach((k,i)=>{ if(i%6===0||i===keys.length-1) txt(x,MON[+k.slice(5)-1]+" "+k.slice(2,4),X(i),h-14,{s:18,c:PAL.muted,al:"center"}); });
+  keys.forEach((k,i)=>{ if(i%3===0){ const anchor=i===0?"left":"center"; txt(x,MON[+k.slice(5,7)-1]+" '"+k.slice(2,4),X(i),h-14,{s:18,c:PAL.muted,al:anchor}); } });
   x.beginPath(); keys.forEach((k,i)=>i?x.lineTo(X(i),Y(m.get(k).a)):x.moveTo(X(i),Y(m.get(k).a))); x.lineTo(X(keys.length-1),Y(0)); x.lineTo(X(0),Y(0)); x.closePath(); x.fillStyle="rgba(0,90,255,.08)"; x.fill();
   [["a",PAL.c[0]],["b",PAL.c[1]]].forEach(([f,col])=>{ x.beginPath(); keys.forEach((k,i)=>i?x.lineTo(X(i),Y(m.get(k)[f])):x.moveTo(X(i),Y(m.get(k)[f]))); x.strokeStyle=col; x.lineWidth=3; x.lineJoin="round"; x.stroke(); });
   return c;
@@ -464,7 +488,7 @@ function buildPages(){
   const tw=(W-168-4*16)/5; D.kp.forEach((k,i)=>{ const cx=84+i*(tw+16); x.strokeStyle=PAL.line; rr(x,cx,430,tw,130,6); x.stroke(); x.fillStyle=k[3]; x.fillRect(cx+2,430,tw-4,6); txt(x,k[0],cx+18,472,{s:18,c:PAL.muted}); txt(x,k[1],cx+18,520,{s:44,w:700,c:k[3]}); txt(x,k[2],cx+18,548,{s:17,c:PAL.muted}); });
   sectionTitle(x,"Open lines by posting month",84,620); x.drawImage(cLine(520,300),84,640);
   sectionTitle(x,"Issues by group",640,620); x.drawImage(cDonut(516,300),640,640);
-  txt(x,"■ All lines   ■ With an issue   last 24 months",84,970,{s:17,c:PAL.muted});
+  txt(x,"■ All lines   ■ With an issue   · Last 24 calendar months",84,970,{s:17,c:PAL.muted});
   sectionTitle(x,"Issues by type",84,1020); x.drawImage(cBars(620,D.typeItems,N*0.4,46),84,1040);
   sectionTitle(x,"Before and after the scan",750,1020);
   [["Before",nf0.format(N)+" lines","read one by one in SAP exports",PAL.blue],["After the scan",nf0.format(clearRows.length)+" to clear","each with a proposed clearing to approve",PAL.green],["Left for people",nf0.format(caseKeys.size)+" cases",nf0.format(caseRows.length)+" lines grouped by company and partner",PAL.c[1]]].forEach((b,i)=>{ const y=1050+i*150; x.fillStyle=b[3]; x.fillRect(750,y,8,128); x.fillStyle="#F3F5F9"; x.fillRect(758,y,W-84-758,128); txt(x,b[0],782,y+36,{s:19,c:PAL.muted}); txt(x,b[1],782,y+80,{s:36,w:700}); txt(x,b[2],782,y+112,{s:19,c:PAL.muted}); });
