@@ -35,37 +35,54 @@ async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("
 
 /* ---------- rules ---------- */
 const CODES = {
-  WRONG_TP:{name:"Wrong trading partner", grp:"partner", cls:"red", fix:"Change trading partner ATP054 to NC157 (the payable mirrors C157's receivable)"},
-  NO_TP:{name:"Missing trading partner", grp:"partner", cls:"red", fix:"Fill the partner from the mirror entry in the other ERP"},
+  WRONG_TP:{name:"Wrong trading partner", grp:"partner", cls:"red", fix:"Suggestion: recode the partner to the standard NC code that the mirror entry points to."},
+  NO_TP:{name:"Missing trading partner", grp:"partner", cls:"red", fix:"Suggestion: take the partner from matching information."},
+  MULTI_TP:{name:"Partner code variants (master data)", grp:"partner", cls:"amber", fix:"Several codes exist for this partner number. Send to master-data validation; do not recode automatically."},
   WRONG_CUR:{name:"Wrong currency / amount", grp:"currency", cls:"red", fix:"Clear against its manual offset; block posting when the implied rate is over 3x"},
   BAD_CUR:{name:"Invalid currency code", grp:"currency", cls:"red", fix:"Change currency XO2 to XOF"},
   FX_REVAL:{name:"FX revaluation line", grp:"currency", cls:"amber", fix:"Tag as FX revaluation and clear against its reversal"},
   DUPLICATE:{name:"Possible duplicate", grp:"uncleared", cls:"red", fix:"Reverse the duplicate after the partner confirms"},
   UNCLEARED:{name:"Offsetting lines not cleared", grp:"uncleared", cls:"amber", fix:"Propose one clearing for the lines that net to zero"},
-  OVER_365:{name:"Open more than 365 days", grp:"ageing", cls:"amber", fix:"Open a case, assign an owner, set a follow-up date"},
+  OVER_365:{name:"Open more than 365 days", grp:"ageing", cls:"amber", fix:"Investigate: review the cause, assign an owner, set a follow-up date. Age alone is not a reason to write off."},
   DQ_ZERO:{name:"Zero-amount line", grp:"quality", cls:"grey", fix:"Exclude from the balance and clear"},
   CONTROL:{name:"Self-posted control line", grp:"quality", cls:"grey", fix:"Send to a second reviewer"}
 };
 const GROUPS = [
-  {id:"partner", name:"Partner coding", codes:["WRONG_TP","NO_TP"], note:"Lines booked to the wrong trading partner, or with none. Partner balances cannot match until these are recoded."},
+  {id:"partner", name:"Partner coding", codes:["WRONG_TP","NO_TP","MULTI_TP"], note:"Lines booked to the wrong trading partner, with none, or with a partner number that has several codes. Partners shown here are suggestions only; where several codes exist the case goes to master-data validation."},
   {id:"currency", name:"Currency", codes:["WRONG_CUR","BAD_CUR","FX_REVAL"], note:"Wrong currency or amount, invalid currency codes, and FX revaluation lines that inflate the open item list."},
   {id:"uncleared", name:"Duplicates & uncleared", codes:["DUPLICATE","UNCLEARED"], note:"Lines that already net out or appear twice. Most can be closed with a single clearing proposal."},
-  {id:"ageing", name:"Ageing", codes:["OVER_365"], note:"Open for more than a year. These need an owner and a decision, not another month of carry-forward."},
+  {id:"ageing", name:"Ageing", codes:["OVER_365"], note:"Open for more than a year (report date minus posting date). Flagged separately for investigation: they need an owner, a review of the cause and a follow-up. The tool never suggests a write-off because of age alone."},
   {id:"quality", name:"Data quality", codes:["DQ_ZERO","CONTROL"], note:"Zero amounts and lines posted and approved by the same user."}
 ];
 const GCOL = {partner:"var(--c1)",currency:"var(--c2)",uncleared:"var(--c3)",ageing:"var(--c4)",quality:"var(--c5)"};
 const CLEARING = new Set(["DUPLICATE","UNCLEARED","FX_REVAL","DQ_ZERO","WRONG_CUR"]);
+/* Aging = report date minus POSTING date (Nokia). Rebuild days open and the >365 flag from the posting date. */
+ROWS.forEach(r=>{ r.ageSrc=r.age; if(r.pdate) r.age=REPN-dayNum(r.pdate);
+  r.codes=r.codes.filter(c=>c!=="OVER_365"); if(r.age!=null && r.age>365) r.codes.push("OVER_365"); });
+/* Several partner codes for one partner number (e.g. NC161 and TP-161): flag for master-data validation, never recode automatically */
+const tpNum = t=>t.replace(/\D/g,"");
+const tpVar = {}; ROWS.forEach(r=>{ if(r.tp){ const n=tpNum(r.tp); (tpVar[n]=tpVar[n]||new Set()).add(r.tp); } });
+ROWS.forEach(r=>{ r.isIssue = r.codes.length>0; if(r.tp && tpVar[tpNum(r.tp)].size>1) r.codes.push("MULTI_TP"); });
+/* Suggested partner for lines without one: the partner most often used by the same company, account and currency. A suggestion only. */
+const tpHist = {}; ROWS.forEach(r=>{ if(r.tp){ const k=r.co+"|"+r.acct+"|"+r.cur; const h=tpHist[k]=tpHist[k]||{}; h[r.tp]=(h[r.tp]||0)+1; } });
+function suggestTp(r){ const h=tpHist[r.co+"|"+r.acct+"|"+r.cur]; if(!h) return null;
+  const e=Object.entries(h).sort((a,b)=>b[1]-a[1]); const tot=e.reduce((a,x)=>a+x[1],0); return {tp:e[0][0], n:e[0][1], tot}; }
+/* Standard intercompany payment terms (days after posting) for lines without a due date; 0 = use the SAP due date only. */
+const TERMS = Math.max(0,+store("terms")||0);
+ROWS.forEach(r=>{ r.dueAssumed=false; if(TERMS>0 && !r.due && r.pdate){ r.due=isoOf(dayNum(r.pdate)+TERMS); r.dueAssumed=true; } });
 const byCode = {}; Object.keys(CODES).forEach(c=>byCode[c]=[]);
 ROWS.forEach(r=>r.codes.forEach(c=>byCode[c]&&byCode[c].push(r)));
-const issueRows = ROWS.filter(r=>r.codes.length);
+const issueRows = ROWS.filter(r=>r.isIssue);
 const clearRows = issueRows.filter(r=>r.codes.some(c=>CLEARING.has(c)));
 const caseRows = issueRows.filter(r=>!r.codes.some(c=>CLEARING.has(c)));
 const caseKeys = new Set(caseRows.map(r=>r.sheet+"|"+r.co+"|"+r.tp));
 
 function fixFor(r,c){
-  if(c==="NO_TP"){ return CODES[c].fix; }
+  if(c==="NO_TP"){ const g=suggestTp(r); return g? `Suggestion: partner ${g.tp}, used on ${g.n} of ${g.tot} lines of ${r.co} with the same account and currency.` : "No suggestion available from matching information."; }
+  if(c==="WRONG_TP") return `Suggestion: recode ${r.tp} to the standard NC code that the mirror entry points to.`;
+  if(c==="MULTI_TP") return `Codes ${[...tpVar[tpNum(r.tp)]].join(", ")} exist for partner number ${tpNum(r.tp)}. Send to master-data validation; do not recode automatically.`;
   if(c==="UNCLEARED") return `Clear with the other open lines of ${r.co} → ${r.tp||"?"} in ${r.cur} that net to zero`;
-  if(c==="OVER_365") return `Open a case for ${r.co} → ${r.tp||"?"}, ${nf0.format(r.age)} days open; owner and follow-up date`;
+  if(c==="OVER_365") return `Investigate ${r.co} → ${r.tp||"?"}, ${nf0.format(r.age)} days open: review the cause, owner and follow-up date. No write-off based on age alone.`;
   return CODES[c].fix;
 }
 
@@ -86,7 +103,14 @@ Object.values(cases).forEach(c=>{
 });
 store("owners",owners);
 if(casesChanged) store("cases",cases);
-function setDecision(i,v){ if(decisions[i]===v) delete decisions[i]; else decisions[i]=v; store("decisions",decisions); }
+const LOG = store("log")||[];
+let reviewer = store("reviewer")||"";
+function logEv(action,item,detail){ LOG.unshift({t:new Date().toISOString(),by:reviewer||"(no name)",action,item,detail:detail||""}); if(LOG.length>500) LOG.length=500; store("log",LOG); }
+function setDecision(i,v){ const r=ROWS[i];
+  if(decisions[i]===v){ delete decisions[i]; logEv("Decision withdrawn",r.sheet+" "+r.co+"→"+(r.tp||"?")+" doc "+r.doc,""); }
+  else { decisions[i]=v; logEv(v==="ok"?"Suggestion accepted":"Suggestion rejected",r.sheet+" "+r.co+"→"+(r.tp||"?")+" doc "+r.doc,r.codes.map(c=>CODES[c]?CODES[c].name:c).join(", ")); }
+  store("decisions",decisions); }
+$("#reviewer").value=reviewer; $("#reviewer").onchange=e=>{ reviewer=e.target.value.trim(); store("reviewer",reviewer); toast("Decisions will be logged as "+(reviewer||"(no name)")); };
 
 /* ---------- AI / downloads / mcp ---------- */
 let sample=null, downloads=null, mcp=null;
@@ -120,7 +144,10 @@ function groupCases(rows,dateOf){
   rows.forEach(r=>{ const k=r.sheet+"|"+r.co+"|"+r.tp; let g=m.get(k); if(!g){ g={k,sheet:r.sheet,co:r.co,tp:r.tp,rows:[],sum:{},oldest:null}; m.set(k,g);} g.rows.push(r); g.sum[r.cur]=(g.sum[r.cur]||0)+r.dc; const d=dateOf(r); if(d&&(!g.oldest||d<g.oldest)) g.oldest=d; });
   return [...m.values()].map(g=>{ g.days = g.oldest? REPN-dayNum(g.oldest):0; return g; }).sort((a,b)=>b.days-a.days||b.rows.length-a.rows.length);
 }
-const odCases = groupCases(overdueRows,r=>r.due);
+let BASIS = store("basis")==="due" ? "due" : "post";   // aging basis: posting date (Nokia default) or due date
+const buildOd = ()=>groupCases(overdueRows, BASIS==="post"? (r=>r.pdate) : (r=>r.due));
+let odCases = buildOd();
+const basisWord = ()=> BASIS==="post"? "days open" : "days overdue";
 const nodueCases = groupCases(ROWS.filter(r=>!r.due && r.age>90),r=>r.pdate);
 const sumTxt = s=>Object.entries(s).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,2).map(([c,v])=>fmtAmt(v)+" "+c).join("<br>")+(Object.keys(s).length>2?`<br><span class="note">+${Object.keys(s).length-2} more</span>`:"");
 
@@ -131,7 +158,7 @@ function renderBell(){
   const sd = Object.entries(soonDays).sort();
   $("#bellBadge").textContent = openOd.length + sd.length;
   let h = ``;
-  h += `<div class="bell-item" data-go="#overdue"><i class="dot red"></i><div><b>${openOd.length} overdue cases</b><div class="note">${nf0.format(overdueRows.length)} lines past due; oldest ${nf0.format(odCases[0]?odCases[0].days:0)} days</div></div></div>`;
+  h += `<div class="bell-item" data-go="#overdue"><i class="dot red"></i><div><b>${openOd.length} overdue cases</b><div class="note">${nf0.format(overdueRows.length)} lines past due; oldest ${nf0.format(odCases[0]?odCases[0].days:0)} ${basisWord()}</div></div></div>`;
   sd.slice(0,6).forEach(([d,n])=>{ h+=`<div class="bell-item" data-go="#calendar/${d}"><i class="dot amber"></i><div><b>${n} lines due ${fmtDate(d)}</b><div class="note">in ${dayNum(d)-REPN} days</div></div></div>`; });
   if(!sd.length) h+=`<div class="note" style="padding:8px">Nothing due in the next 14 days.</div>`;
   $("#bellPanel").innerHTML=h;
@@ -153,7 +180,7 @@ function renderOverview(){
   ];
   $("#kpis").innerHTML = kp.map(k=>`<div class="card kpi ${k.c}"><div class="label">${k.l}</div><div class="value">${k.v}</div><div class="sub">${k.s}</div></div>`).join("");
   const _ba = `<div class="step"><span class="note">Before</span><span class="big">${nf0.format(N)} lines</span><span class="note">read one by one</span></div>
-    <div class="step"><span class="note">After the scan</span><span class="big">${nf0.format(clearRows.length)} to clear</span><span class="note">approve a proposed clearing</span></div>
+    <div class="step"><span class="note">After the scan</span><span class="big">${nf0.format(clearRows.length)} to clear</span><span class="note">review a suggested clearing</span></div>
     <div class="step"><span class="note">Left for people</span><span class="big">${nf0.format(caseKeys.size)} cases</span><span class="note">${nf0.format(caseRows.length)} lines by company and partner</span></div>`;
   const items = Object.keys(CODES).map(c=>({label:CODES[c].name,value:byCode[c].length,cls:CODES[c].cls==="grey"?"":CODES[c].cls,href:"#errors/"+CODES[c].grp+"/"+c,extra:pct(byCode[c].length,N)})).sort((a,b)=>b.value-a.value);
   bars($("#ovBars"),items,{max:N*0.4});
@@ -182,7 +209,7 @@ function renderLine(){
     const k=r.pdate.slice(0,7);
     const o=m.get(k);
     if(!o) return;
-    o.a++; if(r.codes.length) o.b++;
+    o.a++; if(r.isIssue) o.b++;
   });
   if(!keys.length) return;
   const W=720,H=260,L=44,Rr=12,T=14,B=28; const max=Math.max(...keys.map(k=>m.get(k).a)); const nice=Math.ceil(max/100)*100||100;
@@ -207,7 +234,7 @@ function renderErrors(){
   $("#grpTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{ location.hash="#errors/"+b.dataset.g; });
   $("#codeTabs").innerHTML = `<button aria-pressed="${!E.code}" data-c="">All</button>`+g.codes.map(c=>`<button aria-pressed="${E.code===c}" data-c="${c}">${CODES[c].name}<span class="n">${nf0.format(byCode[c].length)}</span></button>`).join("");
   $("#codeTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{ location.hash="#errors/"+g.id+(b.dataset.c?"/"+b.dataset.c:""); });
-  
+  $("#grpNote").textContent=g.note; $("#grpNote").hidden=false;
   const codes = E.code? [E.code] : g.codes;
   const seen=new Set(); let list=[];
   codes.forEach(c=>byCode[c].forEach(r=>{ if(!seen.has(r.i)){ seen.add(r.i); list.push(r);} }));
@@ -220,7 +247,7 @@ function renderErrors(){
     const mine = r.codes.filter(c=>codes.includes(c)); const c0=mine[0]||r.codes[0]; const d=decisions[r.i];
     const dueP = r.due? `<span class="pill ${dueCls(r.due)}">${fmtDate(r.due)}</span>` : `<span class="note">–</span>`;
     const fx=fixFor(r,c0); const od=r.due&&r.due<REPORT;
-    return `<tr data-i="${r.i}" class="${d==="ok"?"is-ok":d==="no"?"is-no":""}"><td><b>${esc(r.co)} → ${esc(r.tp||"—")}</b><div class="note">${r.sheet} · ${esc(r.doc)} · ${fmtDate(r.pdate)}</div></td><td class="num"><b>${nf2.format(r.dc)}</b> ${esc(r.cur)}<div class="note">${r.age!=null?nf0.format(r.age)+" days open":""}${od?' · <span style="color:var(--red)">overdue</span>':""}</div></td><td class="wrap"><div>${r.codes.slice(0,2).map(c=>`<span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:c}</span>`).join(" ")}${r.codes.length>2?` <button type="button" class="ghost small more-issues" aria-expanded="false">+${r.codes.length-2}</button>`:""}</div><div class="fixtxt">${esc(fx)}</div><div class="extra-issues" hidden>${r.codes.slice(2).map(c=>`<div class="extra-issue"><span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:esc(c)}</span><div class="fixtxt">${esc(fixFor(r,c))}</div></div>`).join("")}</div><div class="inline-ai" hidden></div></td><td class="dec"><div class="decide"><button class="ic ok" aria-pressed="${d==="ok"}" title="Approve fix" aria-label="Approve fix">✓</button><button class="ic no" aria-pressed="${d==="no"}" title="Reject fix" aria-label="Reject fix">✕</button></div><button class="ghost small ai-only" data-ai>Explain</button></td></tr>`;
+    return `<tr data-i="${r.i}" class="${d==="ok"?"is-ok":d==="no"?"is-no":""}"><td><b>${esc(r.co)} → ${esc(r.tp||"—")}</b><div class="note">${r.sheet} · ${esc(r.doc)} · ${fmtDate(r.pdate)}</div></td><td class="num"><b>${nf2.format(r.dc)}</b> ${esc(r.cur)}<div class="note">${r.age!=null?nf0.format(r.age)+" days open":""}${od?' · <span style="color:var(--red)">overdue</span>':""}</div></td><td class="wrap"><div>${r.codes.slice(0,2).map(c=>`<span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:c}</span>`).join(" ")}${r.codes.length>2?` <button type="button" class="ghost small more-issues" aria-expanded="false">+${r.codes.length-2}</button>`:""}</div><div class="fixtxt"><span class="sugg">suggestion</span>${esc(fx)}</div><div class="extra-issues" hidden>${r.codes.slice(2).map(c=>`<div class="extra-issue"><span class="pill ${CODES[c]?CODES[c].cls:"grey"}">${CODES[c]?CODES[c].name:esc(c)}</span><div class="fixtxt">${esc(fixFor(r,c))}</div></div>`).join("")}</div><div class="inline-ai" hidden></div></td><td class="dec"><div class="decide"><button class="ic ok" aria-pressed="${d==="ok"}" title="Accept suggestion" aria-label="Accept suggestion">✓</button><button class="ic no" aria-pressed="${d==="no"}" title="Reject suggestion" aria-label="Reject suggestion">✕</button></div><button class="ghost small ai-only" data-ai>Explain</button></td></tr>`;
   }).join("") : `<tr><td colspan="4" class="empty">No lines match.</td></tr>`;
   $("#errBody").querySelectorAll("tr[data-i]").forEach(tr=>{
     const r=ROWS[+tr.dataset.i];
@@ -234,7 +261,7 @@ function renderErrors(){
       tr.querySelector(".extra-issues").hidden=!expanded;
     };
     const ab=tr.querySelector("[data-ai]"); ab.onclick=()=>{ const out=tr.querySelector(".inline-ai");
-      ask(`You are an intercompany reconciliation analyst at a telecom group. In at most 3 short sentences, explain why this open SAP line was flagged and what the accountant should do, in plain English. No preamble.\nLine: ERP ${r.sheet}, company ${r.co}, trading partner ${r.tp||"(none)"}, account ${r.acct} ${r.desc}, doc ${r.doc} type ${r.type}, posted ${r.pdate}, due ${r.due||"n/a"}, amount ${r.dc} ${r.cur} (local ${r.lc} ${r.lcur}), age ${r.age} days, text "${r.text}", reference "${r.ref}".\nFlags: ${r.codes.map(c=>CODES[c]?CODES[c].name:c).join(", ")}.\nProposed fix: ${fixFor(r,r.codes[0])}.`, out, ab); };
+      ask(`You are an intercompany reconciliation analyst at a telecom group. In at most 3 short sentences, explain why this open SAP line was flagged and what the accountant should do, in plain English. Present it as a suggestion for the accountant to validate; never suggest a write-off because of age. No preamble.\nLine: ERP ${r.sheet}, company ${r.co}, trading partner ${r.tp||"(none)"}, account ${r.acct} ${r.desc}, doc ${r.doc} type ${r.type}, posted ${r.pdate}, due ${r.due||"n/a"}, amount ${r.dc} ${r.cur} (local ${r.lc} ${r.lcur}), days open ${r.age}, text "${r.text}", reference "${r.ref}".\nFlags: ${r.codes.map(c=>CODES[c]?CODES[c].name:c).join(", ")}.\nProposed fix: ${fixFor(r,r.codes[0])}.`, out, ab); };
   });
   pager($("#errPager"),E.page,list.length,per,p=>{ E.page=p; renderErrors(); });
 }
@@ -248,7 +275,7 @@ function renderOverdueKpis(){
   const over90 = odCases.filter(g=>g.days>90).length;
   $("#odKpis").innerHTML = [
     {l:"Overdue cases",v:odCases.length,s:nf0.format(overdueRows.length)+" lines",c:"red"},
-    {l:"Over 90 days",v:over90,s:pct(over90,odCases.length)+" of cases",c:"amber"},
+    {l:BASIS==="post"?"Open > 90 days":"Over 90 days",v:over90,s:pct(over90,odCases.length)+" of cases",c:"amber"},
     {l:"With an owner",v:owned,s:pct(owned,odCases.length)+" assigned",c:"blue"},
     {l:"Resolved",v:resolved,s:"this browser",c:"green"}
   ].map(k=>`<div class="card kpi ${k.c}"><div class="label">${k.l}</div><div class="value">${nf0.format(k.v)}</div><div class="sub">${k.s}</div></div>`).join("");
@@ -277,19 +304,23 @@ function renderOverdue(){
   renderOverdueKpis();
   $("#odMode").innerHTML = `<button aria-pressed="${O.mode==="due"}" data-m="due">Past due<span class="n">${odCases.length}</span></button><button aria-pressed="${O.mode==="nodue"}" data-m="nodue">No due date<span class="n">${nodueCases.length}</span></button>`;
   $("#odMode").querySelectorAll("button").forEach(b=>b.onclick=()=>{ O.mode=b.dataset.m; O.page=0; renderOverdue(); });
-  
-  $("#odColDays").textContent = O.mode==="due"?"Days overdue":"Days open";
+  $("#odBasis").innerHTML = `<span class="note" style="align-self:center">Aging basis</span><button aria-pressed="${BASIS==="post"}" data-b="post" title="Report date minus posting date (Nokia's definition)">Posting date</button><button aria-pressed="${BASIS==="due"}" data-b="due" title="Report date minus due date">Due date</button>`;
+  $("#odBasis").querySelectorAll("button").forEach(b=>b.onclick=()=>{ BASIS=b.dataset.b; store("basis",BASIS); odCases=buildOd(); O.page=0; renderBell(); renderOverdue(); });
+  $("#odLead").innerHTML = `Past due on the report date, <b>${fmtDate(REPORT)}</b> (never today's date). Aging is <b>report date minus ${BASIS==="post"?"posting date":"due date"}</b>${BASIS==="post"?" (Nokia's definition, the default)":""}. Older items are flagged for investigation and follow-up, never for write-off by age alone. Owner, status and notes are logged.`;
+  $("#odTerms").innerHTML = `<label class="row">Standard intercompany payment terms for lines without a due date <input type="number" id="termsDays" min="0" max="365" step="1" value="${TERMS}" style="width:80px"> days after posting</label><button class="small" id="termsApply">Apply</button><span>${TERMS>0?"Applied: "+nf0.format(ROWS.filter(r=>r.dueAssumed).length)+" lines use an assumed due date.":"0 = use the SAP due date only; lines without one stay in the No due date tab."}</span>`;
+  $("#termsApply").onclick=()=>{ store("terms",Math.max(0,+$("#termsDays").value||0)); location.reload(); };
+  $("#odColDays").textContent = (O.mode==="due" && BASIS==="due")?"Days overdue":"Days open";
   let list = src.filter(g=>!O.status || ((cases[g.k]||{}).status||"Open")===O.status);
   const per=20; const pages=Math.max(1,Math.ceil(list.length/per)); if(O.page>=pages) O.page=pages-1;
   const slice=list.slice(O.page*per,(O.page+1)*per);
   const ST=["Open","In progress","Waiting for partner","Resolved"];
   $("#odBody").innerHTML = slice.length? slice.map(g=>{ const c=cases[g.k]||{}; const st=c.status||"Open";
     const cls = g.days>365?"red":g.days>90?"amber":"green";
-    return `<tr data-k="${esc(g.k)}" class="st-${st.replace(/ /g,"")}"><td><b>${esc(g.co)} → ${esc(g.tp||"no partner")}</b><div class="note">${g.sheet} · ${g.rows.length} lines</div></td><td class="num">${sumTxt(g.sum)}</td><td class="num"><span class="pill ${cls}">${nf0.format(g.days)} days</span><div class="note">since ${fmtDate(g.oldest)}</div></td><td><select data-f="owner" aria-label="Owner" class="slim"><option value="" ${!c.owner?"selected":""}>Unassigned</option>${owners.map(owner=>`<option value="${esc(owner)}" ${owner===c.owner?"selected":""}>${esc(owner)}</option>`).join("")}</select></td><td><select data-f="status" aria-label="Status" class="slim">${ST.map(s=>`<option ${s===st?"selected":""}>${s}</option>`).join("")}</select></td><td class="num"><button class="ghost small" data-more aria-expanded="false">${c.note?"Note ●":"Note"}</button></td></tr><tr class="ai-row" hidden><td colspan="6"><div class="row" style="gap:8px"><input type="text" data-f="note" value="${esc(c.note||"")}" placeholder="Next step" aria-label="Note" style="flex:1;min-width:200px"><button class="small ai-only" data-ai>Draft email</button></div><div class="ai" hidden style="margin-top:8px"></div></td></tr>`;
+    return `<tr data-k="${esc(g.k)}" class="st-${st.replace(/ /g,"")}"><td><b>${esc(g.co)} → ${esc(g.tp||"no partner")}</b><div class="note">${g.sheet} · ${g.rows.length} lines</div></td><td class="num">${sumTxt(g.sum)}</td><td class="num"><span class="pill ${cls}">${nf0.format(g.days)} days</span><div class="note">${(O.mode==="due"&&BASIS==="due")?"overdue since ":"posted "}${fmtDate(g.oldest)}</div></td><td><select data-f="owner" aria-label="Owner" class="slim"><option value="" ${!c.owner?"selected":""}>Unassigned</option>${owners.map(owner=>`<option value="${esc(owner)}" ${owner===c.owner?"selected":""}>${esc(owner)}</option>`).join("")}</select></td><td><select data-f="status" aria-label="Status" class="slim">${ST.map(s=>`<option ${s===st?"selected":""}>${s}</option>`).join("")}</select></td><td class="num"><button class="ghost small" data-more aria-expanded="false">${c.note?"Note ●":"Note"}</button></td></tr><tr class="ai-row" hidden><td colspan="6"><div class="row" style="gap:8px"><input type="text" data-f="note" value="${esc(c.note||"")}" placeholder="Next step" aria-label="Note" style="flex:1;min-width:200px"><button class="small ai-only" data-ai>Draft email</button></div><div class="ai" hidden style="margin-top:8px"></div></td></tr>`;
   }).join("") : `<tr><td colspan="6" class="empty">No cases match.</td></tr>`;
   $("#odBody").querySelectorAll("tr[data-k]").forEach(tr=>{
     const k=tr.dataset.k; const g=src.find(x=>x.k===k); const row=tr.nextElementSibling;
-    const onch=inp=>inp.onchange=()=>{ cases[k]=Object.assign(cases[k]||{}, {[inp.dataset.f]:inp.value}); store("cases",cases); if(inp.dataset.f==="note") tr.querySelector("[data-more]").textContent=inp.value?"Note ●":"Note"; if(inp.dataset.f==="owner") renderOverdueKpis(); if(inp.dataset.f==="status"){ renderBell(); renderOverdue(); } };
+    const onch=inp=>inp.onchange=()=>{ cases[k]=Object.assign(cases[k]||{}, {[inp.dataset.f]:inp.value}); store("cases",cases); logEv("Case "+inp.dataset.f+" set",g.sheet+" "+g.co+"→"+(g.tp||"no partner"),inp.value); if(inp.dataset.f==="note") tr.querySelector("[data-more]").textContent=inp.value?"Note ●":"Note"; if(inp.dataset.f==="owner") renderOverdueKpis(); if(inp.dataset.f==="status"){ renderBell(); renderOverdue(); } };
     tr.querySelectorAll("[data-f]").forEach(onch); row.querySelectorAll("[data-f]").forEach(onch);
     const mb=tr.querySelector("[data-more]"); mb.onclick=()=>{ row.hidden=!row.hidden; mb.setAttribute("aria-expanded",String(!row.hidden)); };
     row.querySelector("[data-ai]").onclick=e=>{ const out=row.querySelector(".ai");
@@ -365,7 +396,7 @@ let cT; $("#cmSearch").oninput=e=>{ clearTimeout(cT); cT=setTimeout(()=>{ M.q=e.
 
 /* ---------- analysis ---------- */
 function stats(){
-  const erp={}; ROWS.forEach(r=>{ const e=erp[r.sheet]=erp[r.sheet]||{n:0,i:0}; e.n++; if(r.codes.length) e.i++; });
+  const erp={}; ROWS.forEach(r=>{ const e=erp[r.sheet]=erp[r.sheet]||{n:0,i:0}; e.n++; if(r.isIssue) e.i++; });
   const co={}; issueRows.forEach(r=>co[r.co]=(co[r.co]||0)+1);
   const dec=Object.values(decisions); const ok=dec.filter(x=>x==="ok").length, no=dec.filter(x=>x==="no").length;
   return {erp,co:Object.entries(co).sort((a,b)=>b[1]-a[1]).slice(0,8),ok,no};
@@ -379,33 +410,40 @@ function renderAnalysis(){
   bars($("#anCo"),s.co.map(([k,v])=>({label:k,value:v,extra:nf0.format(v)})));
   const res=odCases.filter(g=>(cases[g.k]||{}).status==="Resolved").length;
   bars($("#anProg"),[
-    {label:"Approved fixes",value:s.ok,cls:"green",extra:nf0.format(s.ok)+" / "+nf0.format(issueRows.length)},
-    {label:"Rejected fixes",value:s.no,cls:"red",extra:nf0.format(s.no)},
+    {label:"Suggestions accepted",value:s.ok,cls:"green",extra:nf0.format(s.ok)+" / "+nf0.format(issueRows.length)},
+    {label:"Suggestions rejected",value:s.no,cls:"red",extra:nf0.format(s.no)},
     {label:"Cases resolved",value:res,cls:"green",extra:res+" / "+odCases.length}
   ],{max:Math.max(1,issueRows.length/10)});
   $("#recList").innerHTML = recs().map(r=>`<li>${r}</li>`).join("");
+  renderLog();
+}
+function renderLog(){
+  const el=$("#logBody"); if(!el) return;
+  el.innerHTML = LOG.length? LOG.slice(0,30).map(e=>`<tr><td class="num">${esc(e.t.slice(0,16).replace("T"," "))}</td><td>${esc(e.by)}</td><td>${esc(e.action)}</td><td>${esc(e.item)}<div class="note">${esc(e.detail)}</div></td></tr>`).join("") : `<tr><td colspan="4" class="empty">No decisions yet. Accept or reject a suggestion in Errors, or set an owner or status in Overdue.</td></tr>`;
+  $("#logCount").textContent = LOG.length? "Latest "+Math.min(30,LOG.length)+" of "+LOG.length : "";
 }
 function recs(){
-  const top=Object.keys(CODES).sort((a,b)=>byCode[b].length-byCode[a].length);
+  const old=byCode.OVER_365.length;
   return [
-    `Start with clearing: <b>${nf0.format(clearRows.length)}</b> lines (${pct(clearRows.length,N)}) already have a proposed clearing. Approving them in bulk shrinks the list before anyone investigates.`,
-    `Recode partners: <b>${nf0.format(byCode.WRONG_TP.length+byCode.NO_TP.length)}</b> lines have a wrong or missing trading partner. Until they are fixed, partner balances cannot match.`,
-    `Give every overdue case an owner: <b>${odCases.length}</b> cases, <b>${odCases.filter(g=>g.days>90).length}</b> of them more than 90 days past due.`,
-    `Stop new bad data at entry: make the trading partner and a standard comment mandatory (${pct(cmRows.length,N)} of lines have a weak comment), and block currency codes that do not exist (XO2).`,
-    `Biggest single error type is "${CODES[top[0]].name}" with ${pct(byCode[top[0]].length,N)} of lines. Agree a write-off or escalation rule for it in this meeting.`
+    `Start with the clearing proposals: <b>${nf0.format(clearRows.length)}</b> lines (${pct(clearRows.length,N)}) already have a suggested clearing. The accountant reviews and accepts each one; nothing posts without that decision.`,
+    `Review partner suggestions: <b>${nf0.format(byCode.WRONG_TP.length+byCode.NO_TP.length)}</b> lines have a wrong or missing trading partner (suggestions only). <b>${nf0.format(byCode.MULTI_TP.length)}</b> lines use a partner number with several codes: send these to master-data validation.`,
+    `Give every overdue case an owner: <b>${odCases.length}</b> cases, <b>${odCases.filter(g=>g.days>90).length}</b> of them more than 90 ${basisWord()}.`,
+    `Investigate old open items: <b>${nf0.format(old)}</b> lines are open more than 365 days (report date minus posting date). Review the cause and agree a follow-up per case; age alone is not a reason to write off.`,
+    `Stop new bad data at entry: make the trading partner and a standard comment mandatory (${pct(cmRows.length,N)} of lines have a weak comment), and block currency codes that do not exist (XO2). No materiality threshold: small differences stay on the list.`
   ];
 }
 $("#aiRec").onclick=e=>{ const s=stats();
-  const facts = `Open intercompany lines: ${N}. Report date ${REPORT}. Issue lines: ${issueRows.length}. By rule: ${Object.keys(CODES).map(c=>CODES[c].name+" "+byCode[c].length).join("; ")}. Clearing proposals: ${clearRows.length}. Cases left for people: ${caseKeys.size}. Overdue cases: ${odCases.length} (${overdueRows.length} lines), >90 days: ${odCases.filter(g=>g.days>90).length}. Due in next 14 days: ${soonRows.length} lines. Weak comments: ${cmRows.length}. By ERP: ${Object.entries(s.erp).map(([k,v])=>k+" "+v.i+"/"+v.n).join(", ")}. Top companies by issue lines: ${s.co.map(x=>x[0]+" "+x[1]).join(", ")}. Decisions so far: ${s.ok} approved, ${s.no} rejected.`;
-  ask(`You advise a corporate intercompany accounting team preparing for their month-end meeting. From the facts below, give 5 prioritised, concrete recommendations (one or two sentences each, numbered), then one line on what to measure next month. Use only these facts; do not invent numbers.\n${facts}`, $("#aiRecOut"), e.target); };
+  const facts = `Open intercompany lines: ${N}. Report date ${REPORT}. Issue lines: ${issueRows.length}. By rule: ${Object.keys(CODES).map(c=>CODES[c].name+" "+byCode[c].length).join("; ")}. Clearing proposals: ${clearRows.length}. Cases left for people: ${caseKeys.size}. Overdue cases: ${odCases.length} (${overdueRows.length} lines), >90 ${basisWord()}: ${odCases.filter(g=>g.days>90).length}. Due in next 14 days: ${soonRows.length} lines. Weak comments: ${cmRows.length}. By ERP: ${Object.entries(s.erp).map(([k,v])=>k+" "+v.i+"/"+v.n).join(", ")}. Top companies by issue lines: ${s.co.map(x=>x[0]+" "+x[1]).join(", ")}. Decisions so far: ${s.ok} approved, ${s.no} rejected.`;
+  ask(`You advise a corporate intercompany accounting team preparing for their month-end meeting. From the facts below, give 5 prioritised, concrete recommendations (one or two sentences each, numbered), then one line on what to measure next month. Use only these facts; do not invent numbers. Never recommend a write-off based on age alone, and never recommend ignoring small differences. Present everything as decision support for the accountant to validate.\n${facts}`, $("#aiRecOut"), e.target); };
 
 function csv(rows){ return rows.map(r=>r.map(v=>{ v=v==null?"":String(v); return /[",\n;]/.test(v)? '"'+v.replace(/"/g,'""')+'"' : v; }).join(",")).join("\n"); }
+$("#expLog").onclick=()=>{ const out=[["time_utc","reviewer","action","item","detail"]]; LOG.forEach(e=>out.push([e.t,e.by,e.action,e.item,e.detail])); saveFile("ic-decision-log-"+REPORT+".csv",csv(out)); };
 $("#expIssues").onclick=()=>{
   const out=[["erp","company","partner","account","doc","doc_type","posting_date","due_date","amount","currency","age_days","issues","proposed_fix","decision","text","reference"]];
   issueRows.forEach(r=>out.push([r.sheet,r.co,r.tp,r.acct,r.doc,r.type,r.pdate,r.due,r.dc,r.cur,r.age,r.codes.map(c=>CODES[c]?CODES[c].name:c).join(" | "),fixFor(r,r.codes[0]),decisions[r.i]==="ok"?"approved":decisions[r.i]==="no"?"rejected":"",r.text,r.ref]));
   saveFile("ic-issues-"+REPORT+".csv",csv(out)); };
 $("#expCases").onclick=()=>{
-  const out=[["erp","company","partner","lines","oldest_due","days_overdue","amounts","owner","status","note"]];
+  const out=[["erp","company","partner","lines","oldest_"+(BASIS==="post"?"posting":"due"),BASIS==="post"?"days_open":"days_overdue","amounts","owner","status","note"]];
   odCases.forEach(g=>{ const c=cases[g.k]||{}; out.push([g.sheet,g.co,g.tp,g.rows.length,g.oldest,g.days,Object.entries(g.sum).map(([k,v])=>v.toFixed(2)+" "+k).join(" | "),c.owner||"",c.status||"Open",c.note||""]); });
   saveFile("ic-overdue-cases-"+REPORT+".csv",csv(out)); };
 
@@ -429,7 +467,7 @@ function cLine(w,h){
     if(!r.pdate) return;
     const k=r.pdate.slice(0,7); const o=m.get(k);
     if(!o) return;
-    o.a++; if(r.codes.length) o.b++;
+    o.a++; if(r.isIssue) o.b++;
   });
   const L=70,T=20,B=44,Rr=14; const mx=Math.max(...keys.map(k=>m.get(k).a)); const nice=Math.ceil(mx/500)*500||500;
   const X=i=>L+(w-L-Rr)*i/Math.max(1,keys.length-1), Y=v=>T+(h-T-B)*(1-v/nice);
@@ -491,7 +529,7 @@ function buildPages(){
   txt(x,"■ All lines   ■ With an issue   · Last 24 calendar months",84,970,{s:17,c:PAL.muted});
   sectionTitle(x,"Issues by type",84,1020); x.drawImage(cBars(620,D.typeItems,N*0.4,46),84,1040);
   sectionTitle(x,"Before and after the scan",750,1020);
-  [["Before",nf0.format(N)+" lines","read one by one in SAP exports",PAL.blue],["After the scan",nf0.format(clearRows.length)+" to clear","each with a proposed clearing to approve",PAL.green],["Left for people",nf0.format(caseKeys.size)+" cases",nf0.format(caseRows.length)+" lines grouped by company and partner",PAL.c[1]]].forEach((b,i)=>{ const y=1050+i*150; x.fillStyle=b[3]; x.fillRect(750,y,8,128); x.fillStyle="#F3F5F9"; x.fillRect(758,y,W-84-758,128); txt(x,b[0],782,y+36,{s:19,c:PAL.muted}); txt(x,b[1],782,y+80,{s:36,w:700}); txt(x,b[2],782,y+112,{s:19,c:PAL.muted}); });
+  [["Before",nf0.format(N)+" lines","read one by one in SAP exports",PAL.blue],["After the scan",nf0.format(clearRows.length)+" to clear","each with a suggested clearing to review",PAL.green],["Left for people",nf0.format(caseKeys.size)+" cases",nf0.format(caseRows.length)+" lines grouped by company and partner",PAL.c[1]]].forEach((b,i)=>{ const y=1050+i*150; x.fillStyle=b[3]; x.fillRect(750,y,8,128); x.fillStyle="#F3F5F9"; x.fillRect(758,y,W-84-758,128); txt(x,b[0],782,y+36,{s:19,c:PAL.muted}); txt(x,b[1],782,y+80,{s:36,w:700}); txt(x,b[2],782,y+112,{s:19,c:PAL.muted}); });
   pageFooter(x,W,H,1,2); pages.push(c1);
   let [c2,y2]=mkCanvas(W,H); y2.fillStyle="#fff"; y2.fillRect(0,0,W,H); x=y2;
   pageHeader(x,W,"Where to act first","","Intercompany · Detail");
@@ -500,7 +538,7 @@ function buildPages(){
   sectionTitle(x,"Issue lines by ERP",84,yy+70); x.drawImage(cBars(480,D.erp,Math.max(...D.erp.map(e=>e.value))*1.6,46),84,yy+90);
   sectionTitle(x,"Comment quality",640,yy+70); x.drawImage(cBars(516,D.cq,N,46),640,yy+90);
   let y3=yy+90+Math.max(D.erp.length,D.cq.length)*46+70;
-  sectionTitle(x,"Review progress",84,y3); txt(x,"Approved fixes: "+D.s.ok+"   Rejected: "+D.s.no+"   Cases resolved: "+D.res+" of "+odCases.length,84,y3+44,{s:24});
+  sectionTitle(x,"Review progress",84,y3); txt(x,"Suggestions accepted: "+D.s.ok+"   Rejected: "+D.s.no+"   Cases resolved: "+D.res+" of "+odCases.length,84,y3+44,{s:24});
   y3+=90; sectionTitle(x,"Recommendations",84,y3); y3+=46;
   D.recs.forEach((r,i)=>{ x.fillStyle=PAL.soft; rr(x,84,y3-26,W-168,10,2); const y0=y3; y3=wrap(x,(i+1)+". "+r,100,y3,W-200,27,{s:19}); y3+=8; });
   pageFooter(x,W,H,2,2); pages.push(c2);
@@ -521,10 +559,11 @@ const NAMES = {EUR:"Euro",USD:"US dollar",HUF:"Hungarian forint",JPY:"Japanese y
 const MAIN = ["USD","EUR","HUF"];
 const cachedRates = store("rates"); if(cachedRates && cachedRates.date>RATES.date) RATES=cachedRates;
 let extra = store("curExtra")||[]; let base = store("curBase")||"EUR";
-const rateOf = c=> c in RATES.r ? RATES.r[c] : PEGS[c];
+let OVR = store("rateOvr")||{}; let SRC = store("rateSrc")||"";
+const rateOf = c=> (c in OVR && OVR[c]>0) ? OVR[c] : (c in RATES.r ? RATES.r[c] : PEGS[c]);
 function renderCurrency(){
   const all = Object.keys(RATES.r).concat(Object.keys(PEGS));
-  $("#curLead").textContent = "ECB · "+fmtDate(RATES.date);
+  $("#curLead").textContent = (Object.keys(OVR).length?(SRC||"Company-approved rates")+" + ":"")+"ECB (demo rate) · "+fmtDate(RATES.date); $("#rateSrc").value=SRC;
   $("#curBase").innerHTML = all.map(c=>`<option ${c===base?"selected":""}>${c}</option>`).join("");
   const shown = MAIN.concat(extra.filter(c=>!MAIN.includes(c)));
   $("#curAddSel").innerHTML = all.filter(c=>!shown.includes(c)).map(c=>`<option value="${c}">${c} · ${NAMES[c]||""}</option>`).join("");
@@ -536,9 +575,17 @@ function renderCurrency(){
   const net={}, cnt={}; ROWS.forEach(r=>{ net[r.cur]=(net[r.cur]||0)+r.dc; cnt[r.cur]=(cnt[r.cur]||0)+1; });
   $("#curConvTh").textContent="In "+base;
   $("#curBody").innerHTML = Object.keys(net).sort((a,b)=>cnt[b]-cnt[a]).map(c=>{ const rc=rateOf(c);
-    return `<tr><td><b>${esc(c)}</b> <span class="note">${NAMES[c]||""}</span></td><td class="num">${nf0.format(cnt[c])}</td><td class="num">${nf2.format(net[c])}</td><td class="num">${rc? nf2.format(net[c]/rc*rb) : "–"}</td><td>${rc? (c in PEGS?'<span class="pill grey">fixed euro rate</span>':'<span class="pill green">ECB</span>') : c==="XO2"?'<span class="pill red">invalid code (XOF?)</span>':'<span class="pill amber">no ECB rate</span>'}</td></tr>`; }).join("");
+    const std=c in RATES.r?RATES.r[c]:PEGS[c]; const ov=c in OVR&&OVR[c]>0;
+    const src = ov? `<span class="pill blue">company-approved${SRC?" · "+esc(SRC):""}</span>` : (rc? (c in PEGS?'<span class="pill grey">fixed euro rate</span>':'<span class="pill green">ECB (demo)</span>') : c==="XO2"?'<span class="pill red">invalid code (XOF?)</span>':'<span class="pill amber">no rate: enter one</span>');
+    return `<tr><td><b>${esc(c)}</b> <span class="note">${NAMES[c]||""}</span></td><td class="num">${nf0.format(cnt[c])}</td><td class="num">${nf2.format(net[c])}</td><td class="num">${rc? nf2.format(net[c]/rc*rb) : "–"}</td><td class="num"><input type="number" step="any" min="0" data-ov="${esc(c)}" value="${rc?rc:""}" placeholder="rate" aria-label="Rate for ${esc(c)} per 1 EUR" style="width:110px;text-align:right"></td><td>${src}</td></tr>`; }).join("");
+  $("#curBody").querySelectorAll("[data-ov]").forEach(inp=>inp.onchange=()=>{ const c=inp.dataset.ov, v=+inp.value;
+    const std=c in RATES.r?RATES.r[c]:PEGS[c];
+    if(v>0 && v!==std){ OVR[c]=v; logEv("Exchange rate set",c,v+" per 1 EUR"+(SRC?" ("+SRC+")":"")); } else { delete OVR[c]; }
+    store("rateOvr",OVR); renderCurrency(); });
 }
 function fmtRate(x){ return x>=100? nf2.format(x) : x>=1? x.toFixed(4) : x.toPrecision(4); }
+$("#rateSrc").onchange=e=>{ SRC=e.target.value.trim(); store("rateSrc",SRC); renderCurrency(); toast("Rate source set"); };
+$("#rateReset").onclick=()=>{ OVR={}; SRC=""; store("rateOvr",OVR); store("rateSrc",SRC); renderCurrency(); toast("Back to ECB demo rates"); };
 $("#curBase").onchange=e=>{ base=e.target.value; store("curBase",base); renderCurrency(); };
 $("#curAmt").oninput=()=>renderCurrency();
 $("#curAdd").onclick=()=>{ const c=$("#curAddSel").value; if(!c) return; extra.push(c); store("curExtra",extra); renderCurrency(); toast(c+" added"); };
@@ -571,7 +618,7 @@ function route(){
   const TT={overview:"Overview",errors:"Errors",overdue:"Overdue",owners:"Owners",calendar:"Due-date calendar",analysis:"Analysis",currency:"Currency",comments:"Comments"}; $("#pageTitle").textContent=TT[v]; R[v]();
 }
 window.addEventListener("hashchange",()=>{ route(); window.scrollTo(0,0); });
-$("#repChip").textContent = (RAW.label?RAW.label+" · ":"")+"Report date "+fmtDate(REPORT);
+$("#repChip").textContent = (RAW.label?RAW.label+" · ":"")+"Report date "+fmtDate(REPORT); $("#repChip").title="All overdue and aging figures are measured from this date, never from today's date.";
 $("#loadData").onchange=e=>{ const f=e.target.files[0]; if(!f) return; f.text().then(t=>{ const j=JSON.parse(t); if(!j.rows||!j.fields) throw new Error("bad"); try{ sessionStorage.setItem("icdd:data",t); }catch(x){ toast("File too large for this browser session"); return; } location.reload(); }).catch(()=>toast("Not a valid data.json")); };
 renderBell(); route();
 })();

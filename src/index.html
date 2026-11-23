@@ -22,6 +22,7 @@
 <header class="top">
   <h1 id="pageTitle">Overview</h1>
   <span class="chip" id="repChip"></span>
+  <label class="chip rev">Reviewer<input type="text" id="reviewer" placeholder="your name" aria-label="Reviewer name for the decision log"></label>
   <label class="btn" style="cursor:pointer;padding:6px 14px" title="Load a data.json file">Load data<input type="file" id="loadData" accept="application/json,.json" hidden></label>
   <div class="bell-wrap">
     <button class="bell" id="bellBtn" aria-label="Notifications" aria-expanded="false">
@@ -43,7 +44,7 @@
     <div class="card"><h2>Issues by type</h2><div class="bars" id="ovBars" style="margin-top:14px"></div></div>
     <div class="card"><div class="row"><h2>Oldest overdue cases</h2><span class="spacer"></span><a href="#overdue">All cases</a></div><div id="ovTop" style="margin-top:8px"></div></div>
   </div>
-</section>
+  </section>
 
 <section class="view" id="v-errors" hidden>
   <div class="subtabs" id="grpTabs" role="tablist" style="align-self:flex-start"></div>
@@ -51,7 +52,7 @@
     <div class="row"><div class="subtabs" id="codeTabs"></div><span class="spacer"></span>
       <input type="search" id="errSearch" placeholder="Search" aria-label="Search lines" style="width:min(240px,100%)"></div>
     <p class="note" id="grpNote" hidden></p>
-    <div class="tablewrap"><table><thead><tr><th>Line</th><th class="num">Amount</th><th>Issue and proposed fix</th><th>Decision</th></tr></thead><tbody id="errBody"></tbody></table></div>
+    <div class="tablewrap"><table><thead><tr><th>Line</th><th class="num">Amount</th><th>Issue and suggested fix</th><th>Decision (accountant / SME)</th></tr></thead><tbody id="errBody"></tbody></table></div>
     <div class="pager" id="errPager"></div>
   </div>
 </section>
@@ -59,9 +60,11 @@
 <section class="view" id="v-overdue" hidden>
   <div class="grid kpis" id="odKpis"></div>
   <div class="card" style="display:flex;flex-direction:column;gap:12px">
-    <div class="row"><div class="subtabs" id="odMode"></div><span class="spacer"></span>
+    <p class="note" id="odLead"></p>
+    <div class="row note" id="odTerms"></div>
+    <div class="row"><div class="subtabs" id="odMode"></div><div class="subtabs" id="odBasis" aria-label="Aging basis"></div><span class="spacer"></span>
       <select id="odStatus" aria-label="Filter by status"><option value="">All statuses</option><option>Open</option><option>In progress</option><option>Waiting for partner</option><option>Resolved</option></select></div>
-    <div class="tablewrap"><table><thead><tr><th>Case</th><th class="num">Open amount</th><th class="num" id="odColDays">Overdue</th><th>Owner</th><th>Status</th><th></th></tr></thead><tbody id="odBody"></tbody></table></div>
+    <div class="tablewrap"><table><thead><tr><th>Case</th><th class="num">Open amount</th><th class="num" id="odColDays">Days open</th><th>Owner</th><th>Status</th><th></th></tr></thead><tbody id="odBody"></tbody></table></div>
     <div class="pager" id="odPager"></div>
   </div>
 </section>
@@ -89,7 +92,7 @@
 
 <section class="view" id="v-analysis" hidden>
   <div class="row"><span class="spacer"></span>
-    <button id="expIssues">Issues CSV</button><button id="expCases">Cases CSV</button><button class="primary" id="expPdf">Report PDF</button></div>
+    <button id="expLog">Decision log CSV</button><button id="expIssues">Issues CSV</button><button id="expCases">Cases CSV</button><button class="primary" id="expPdf">Report PDF</button></div>
   <div class="grid two">
     <div class="card"><h2>Share of lines per error</h2><div class="bars" id="anCodes" style="margin-top:14px"></div></div>
     <div class="card"><h2>Issue lines by ERP</h2><div class="bars" id="anErp" style="margin-top:14px"></div>
@@ -98,6 +101,11 @@
   <div class="grid two">
     <div class="card"><h2>Top companies</h2><div class="bars" id="anCo" style="margin-top:14px"></div></div>
     <div class="card"><h2>Review progress</h2><div class="bars" id="anProg" style="margin-top:14px"></div></div>
+  </div>
+  <div class="card" style="display:flex;flex-direction:column;gap:12px">
+    <div class="row"><h2>Decision log (audit trail)</h2><span class="note" id="logCount"></span></div>
+    <p class="note">Every accepted or rejected suggestion and every owner, status or note change, with time and reviewer. Kept in this browser; nothing is written to SAP.</p>
+    <div class="tablewrap"><table><thead><tr><th>Time (UTC)</th><th>Reviewer</th><th>Action</th><th>Item</th></tr></thead><tbody id="logBody"></tbody></table></div>
   </div>
   <div class="card" style="display:flex;flex-direction:column;gap:12px">
     <div class="row"><h2>Recommendations</h2><span class="spacer"></span><button class="primary ai-only" id="aiRec">Ask AI</button></div>
@@ -111,13 +119,14 @@
     <label class="row">Base <select id="curBase"></select></label>
     <label class="row">Amount <input type="number" id="curAmt" value="1000" min="0" step="any" style="width:120px"></label>
     <span class="chip" id="curLead"></span>
+    <div class="banner" style="flex-basis:100%"><b>Demo setting:</b> the rates below are ECB euro reference rates, used only because they are the easiest to show. Type the company-approved source and edit any rate in the table; edited rates are marked as company-approved.<div class="row" style="margin-top:8px"><label class="row">Rate source <input type="text" id="rateSrc" placeholder="e.g. Nokia Treasury period rate, Sep 2026" style="width:min(340px,100%)"></label><button id="rateReset" class="small">Reset to ECB demo rates</button></div></div>
     <span class="spacer"></span>
     <select id="curAddSel" aria-label="Currency to add"></select><button class="primary" id="curAdd">Add</button>
     <button id="curRefresh" class="mcp-only">Refresh ECB</button>
   </div>
   <div class="grid cur-cards" id="curCards"></div>
   <div class="card"><h2>Open amounts by currency</h2>
-    <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Currency</th><th class="num">Lines</th><th class="num">Net amount</th><th class="num" id="curConvTh">In base</th><th>Rate</th></tr></thead><tbody id="curBody"></tbody></table></div></div>
+    <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Currency</th><th class="num">Lines</th><th class="num">Net amount</th><th class="num" id="curConvTh">In base</th><th class="num">Rate per 1 EUR</th><th>Rate source</th></tr></thead><tbody id="curBody"></tbody></table></div></div>
 </section>
 
 <section class="view" id="v-comments" hidden>
